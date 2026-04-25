@@ -94,6 +94,15 @@ function saveUsers(data) {
   fs.writeFileSync(USERS_FILE, JSON.stringify(data, null, 2), 'utf-8');
 }
 
+function buildUserSnapshot(chat, from) {
+  return {
+    username: from?.username || null,
+    first_name: from?.first_name || chat?.first_name || null,
+    last_name: from?.last_name || chat?.last_name || null,
+    last_seen_at: new Date().toISOString()
+  };
+}
+
 function upsertUser(chatId, updates) {
   const data = loadUsers();
   const idx = data.users.findIndex(u => u.chat_id === chatId);
@@ -103,6 +112,22 @@ function upsertUser(chatId, updates) {
     data.users.push({ chat_id: chatId, joined_at: new Date().toISOString(), ...updates });
   }
   saveUsers(data);
+}
+
+function trackUserFromMessage(msg, extraUpdates = {}) {
+  if (!msg?.chat?.id) return;
+  upsertUser(msg.chat.id, {
+    ...buildUserSnapshot(msg.chat, msg.from),
+    ...extraUpdates
+  });
+}
+
+function trackUserFromCallback(query, extraUpdates = {}) {
+  if (!query?.message?.chat?.id) return;
+  upsertUser(query.message.chat.id, {
+    ...buildUserSnapshot(query.message.chat, query.from),
+    ...extraUpdates
+  });
 }
 
 function getUserById(chatId) {
@@ -141,6 +166,11 @@ bot.onText(/\/start/, async (msg) => {
   session.selectedRoles = [];
   session.roleMessageId = null;
 
+  trackUserFromMessage(msg, {
+    started_at: new Date().toISOString(),
+    onboarding_status: 'started'
+  });
+
   console.log(`/start from ${chatId}`);
 
   const text = [
@@ -163,6 +193,7 @@ bot.onText(/\/start/, async (msg) => {
 
 bot.onText(/\/now/, async (msg) => {
   const chatId = msg.chat.id;
+  trackUserFromMessage(msg);
   const user = getUserById(chatId);
 
   if (!user || !user.roles || user.roles.length === 0) {
@@ -189,6 +220,10 @@ bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
   const session = getSession(chatId);
+
+  trackUserFromCallback(query, {
+    onboarding_status: session.step === 'done' ? 'completed' : 'in_progress'
+  });
 
   if (data.startsWith('role_')) {
     const role = ALL_ROLES.find(r => r.callback === data);
@@ -259,8 +294,11 @@ bot.on('callback_query', async (query) => {
     session.step = 'done';
 
     upsertUser(chatId, {
+      ...buildUserSnapshot(query.message.chat, query.from),
       roles: session.selectedRoles,
-      experience
+      experience,
+      onboarding_status: 'completed',
+      preferences_updated_at: new Date().toISOString()
     });
 
     console.log(`Saved prefs for ${chatId}: roles=${session.selectedRoles.join(', ')}, exp=${experience}`);
