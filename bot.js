@@ -83,7 +83,18 @@ function loadUsers() {
   try {
     if (!fs.existsSync(USERS_FILE)) return { users: [] };
     const raw = fs.readFileSync(USERS_FILE, 'utf-8');
-    return JSON.parse(raw);
+    const parsed = JSON.parse(raw);
+    const users = Array.isArray(parsed?.users) ? parsed.users : [];
+
+    return {
+      users: users.map(user => ({
+        username: null,
+        first_name: null,
+        last_name: null,
+        last_seen_at: null,
+        ...user
+      }))
+    };
   } catch {
     return { users: [] };
   }

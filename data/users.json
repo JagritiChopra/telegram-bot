@@ -1,12 +1,19 @@
 {
   "users": [
     {
+      "username": "jagriti_chopra",
+      "first_name": "Jagriti",
+      "last_name": null,
+      "last_seen_at": "2026-04-25T06:30:48.482Z",
       "chat_id": 7053356410,
-      "joined_at": "2026-04-24T10:44:02.761Z",
+      "joined_at": "2026-04-25T06:28:02.472Z",
       "roles": [
         "Full Stack Developer"
       ],
-      "experience": "Fresher / Student (0 years)"
+      "experience": "Fresher / Student (0 years)",
+      "started_at": "2026-04-25T06:30:38.200Z",
+      "onboarding_status": "completed",
+      "preferences_updated_at": "2026-04-25T06:30:44.655Z"
     }
   ]
 }

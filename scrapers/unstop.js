@@ -10,6 +10,16 @@ const HEADERS = {
   'Referer': 'https://unstop.com/'
 };
 
+function normalizeUnstopJobUrl(value) {
+  if (!value) return 'https://unstop.com/jobs';
+
+  const raw = String(value).trim();
+  if (!raw) return 'https://unstop.com/jobs';
+  if (raw.startsWith('http://') || raw.startsWith('https://')) return raw;
+  if (raw.startsWith('/')) return `https://unstop.com${raw}`;
+  return `https://unstop.com/jobs/${raw}`;
+}
+
 function getPostedAtFromUnstopItem(item) {
   const candidates = [
     item?.published_at,
@@ -108,7 +118,7 @@ async function scrapeUnstop(roles = [], experience = '') {
             ? item.city.join(', ')
             : item.location || 'India';
           const slug = item.seo_url || item.id;
-          const url = slug ? `https://unstop.com/jobs/${slug}` : 'https://unstop.com/jobs';
+          const url = normalizeUnstopJobUrl(slug);
           const postedAt = getPostedAtFromUnstopItem(item);
 
           jobs.push({ title, company, location, url, source: 'Unstop', postedAt });
@@ -147,7 +157,7 @@ async function scrapeUnstop(roles = [], experience = '') {
             title,
             company: company || 'Unknown Company',
             location: location || 'India',
-            url: href ? (href.startsWith('http') ? href : `https://unstop.com${href}`) : 'https://unstop.com/jobs',
+            url: normalizeUnstopJobUrl(href),
             source: 'Unstop',
             postedDate
           });
