@@ -107,6 +107,46 @@ Press `Ctrl+C` in your terminal.
 
 ---
 
+## Deploying On Render
+
+Render web services should use webhooks instead of Telegram polling. If the bot uses polling on Render, Telegram can return:
+
+```text
+ETELEGRAM: 409 Conflict: terminated by other getUpdates request; make sure that only one bot instance is running
+```
+
+This project now handles both modes automatically:
+
+- Local runs use polling
+- Render runs use webhook mode
+
+### Render setup
+
+- Service type: `Web Service`
+- Build command: `npm install`
+- Start command: `npm start`
+- Required env var: `TELEGRAM_TOKEN`
+- Optional env var: `WEBHOOK_URL=https://your-service-name.onrender.com`
+
+If `WEBHOOK_URL` is not set, the bot will try to use Render's public URL variables automatically.
+
+### Health check
+
+After deploy, these endpoints should respond:
+
+```text
+https://your-service-name.onrender.com/
+https://your-service-name.onrender.com/health
+```
+
+Telegram updates are delivered to:
+
+```text
+https://your-service-name.onrender.com/telegram-webhook
+```
+
+---
+
 ## 📦 Committing users.json
 
 After onboarding yourself (and any friends), commit `users.json` to the repo so GitHub Actions can read it:

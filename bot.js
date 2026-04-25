@@ -4,6 +4,7 @@ require('dotenv').config();
 
 const TelegramBot = require('node-telegram-bot-api');
 const fs = require('fs');
+const http = require('http');
 const path = require('path');
 
 const { scrapeInternshala } = require('./scrapers/internshala');
@@ -13,22 +14,31 @@ const { scrapeJSearch } = require('./scrapers/jsearch');
 const { applyAllFilters } = require('./utils/filter');
 const { buildDigestMessageHTML } = require('./utils/formatter');
 
-// ─── Config ───────────────────────────────────────────────────────────────────
-
 const TOKEN = process.env.TELEGRAM_TOKEN;
 if (!TOKEN) {
-  console.error('❌ TELEGRAM_TOKEN not set in environment. Create a .env file.');
+  console.error('TELEGRAM_TOKEN not set in environment. Create a .env file.');
   process.exit(1);
 }
 
 const USERS_FILE = path.join(__dirname, 'data', 'users.json');
+const PORT = Number(process.env.PORT || 10000);
+const WEBHOOK_PATH = process.env.WEBHOOK_PATH || '/telegram-webhook';
+const IS_RENDER = process.env.RENDER === 'true' || !!process.env.RENDER_EXTERNAL_HOSTNAME;
 
-// ─── Bot init ─────────────────────────────────────────────────────────────────
+function normalizeBaseUrl(url) {
+  if (!url) return '';
+  return url.endsWith('/') ? url.slice(0, -1) : url;
+}
 
-const bot = new TelegramBot(TOKEN, { polling: true });
-console.log('🤖 JobBot is running in polling mode...');
+function resolveWebhookBaseUrl() {
+  if (process.env.WEBHOOK_URL) return normalizeBaseUrl(process.env.WEBHOOK_URL);
+  if (process.env.RENDER_EXTERNAL_URL) return normalizeBaseUrl(process.env.RENDER_EXTERNAL_URL);
+  if (process.env.RENDER_EXTERNAL_HOSTNAME) return `https://${process.env.RENDER_EXTERNAL_HOSTNAME}`;
+  return '';
+}
 
-// ─── Role definitions ─────────────────────────────────────────────────────────
+const bot = new TelegramBot(TOKEN, IS_RENDER ? {} : { polling: true });
+console.log(IS_RENDER ? 'JobBot is starting in webhook mode...' : 'JobBot is running in polling mode...');
 
 const ALL_ROLES = [
   { label: 'Software Engineer', callback: 'role_software_engineer' },
@@ -54,15 +64,13 @@ const ALL_ROLES = [
 ];
 
 const EXP_OPTIONS = [
-  { label: '🎓 Fresher / Student (0 years)', callback: 'exp_fresher', value: 'Fresher / Student (0 years)' },
-  { label: '🌱 Junior (0–2 years)', callback: 'exp_junior', value: 'Junior (0–2 years)' },
-  { label: '💼 Mid-level (2–5 years)', callback: 'exp_mid', value: 'Mid-level (2–5 years)' },
-  { label: '🚀 Senior (5+ years)', callback: 'exp_senior', value: 'Senior (5+ years)' }
+  { label: 'Fresher / Student (0 years)', callback: 'exp_fresher', value: 'Fresher / Student (0 years)' },
+  { label: 'Junior (0-2 years)', callback: 'exp_junior', value: 'Junior (0-2 years)' },
+  { label: 'Mid-level (2-5 years)', callback: 'exp_mid', value: 'Mid-level (2-5 years)' },
+  { label: 'Senior (5+ years)', callback: 'exp_senior', value: 'Senior (5+ years)' }
 ];
 
-// ─── User session state (in-memory, per chat_id) ──────────────────────────────
-
-const sessions = {}; // chat_id → { step, selectedRoles, roleMessageId }
+const sessions = {};
 
 function getSession(chatId) {
   if (!sessions[chatId]) {
@@ -70,8 +78,6 @@ function getSession(chatId) {
   }
   return sessions[chatId];
 }
-
-// ─── Data helpers ─────────────────────────────────────────────────────────────
 
 function loadUsers() {
   try {
@@ -104,8 +110,6 @@ function getUserById(chatId) {
   return data.users.find(u => u.chat_id === chatId) || null;
 }
 
-// ─── Keyboard builders ────────────────────────────────────────────────────────
-
 function buildRoleKeyboard(selectedRoles) {
   const buttons = [];
   for (let i = 0; i < ALL_ROLES.length; i += 2) {
@@ -114,13 +118,13 @@ function buildRoleKeyboard(selectedRoles) {
       const role = ALL_ROLES[j];
       const isSelected = selectedRoles.includes(role.label);
       row.push({
-        text: isSelected ? `✅ ${role.label}` : role.label,
+        text: isSelected ? `Selected: ${role.label}` : role.label,
         callback_data: role.callback
       });
     }
     buttons.push(row);
   }
-  buttons.push([{ text: '✅ Done selecting roles →', callback_data: 'roles_done' }]);
+  buttons.push([{ text: 'Done selecting roles', callback_data: 'roles_done' }]);
   return { inline_keyboard: buttons };
 }
 
@@ -130,8 +134,6 @@ function buildExpKeyboard() {
   };
 }
 
-// ─── Command: /start ──────────────────────────────────────────────────────────
-
 bot.onText(/\/start/, async (msg) => {
   const chatId = msg.chat.id;
   const session = getSession(chatId);
@@ -139,15 +141,15 @@ bot.onText(/\/start/, async (msg) => {
   session.selectedRoles = [];
   session.roleMessageId = null;
 
-  console.log(`📥 /start from ${chatId}`);
+  console.log(`/start from ${chatId}`);
 
   const text = [
-    '👋 *Welcome to JobBot!*',
+    '*Welcome to JobBot!*',
     "I'll send you job listings from the last 24 hours every morning.",
     "Let's set up your preferences first.",
     '',
     '*Step 1 of 2: Choose your job roles*',
-    'Select up to 3 roles you\'re interested in:',
+    "Select up to 3 roles you're interested in:",
     '_(tap to select, tap again to deselect)_'
   ].join('\n');
 
@@ -159,8 +161,6 @@ bot.onText(/\/start/, async (msg) => {
   session.roleMessageId = sent.message_id;
 });
 
-// ─── Command: /now ────────────────────────────────────────────────────────────
-
 bot.onText(/\/now/, async (msg) => {
   const chatId = msg.chat.id;
   const user = getUserById(chatId);
@@ -170,29 +170,28 @@ bot.onText(/\/now/, async (msg) => {
     return;
   }
 
-  await bot.sendMessage(chatId, '🔍 Fetching jobs for you right now... This may take a moment.');
+  await bot.sendMessage(chatId, 'Fetching jobs for you right now. This may take a moment.');
 
   try {
     const jobs = await fetchJobsForUser(user);
     const message = buildDigestMessageHTML(jobs, user);
-    await bot.sendMessage(chatId, message, { parse_mode: 'HTML', disable_web_page_preview: true });
+    await bot.sendMessage(chatId, message, {
+      parse_mode: 'HTML',
+      disable_web_page_preview: true
+    });
   } catch (err) {
     console.error(`[/now] Error for ${chatId}:`, err.message);
-    await bot.sendMessage(chatId, '❌ Something went wrong while fetching jobs. Please try again later.');
+    await bot.sendMessage(chatId, 'Something went wrong while fetching jobs. Please try again later.');
   }
 });
-
-// ─── Callback query handler ───────────────────────────────────────────────────
 
 bot.on('callback_query', async (query) => {
   const chatId = query.message.chat.id;
   const data = query.data;
   const session = getSession(chatId);
 
-  // ── Role selection ──
   if (data.startsWith('role_')) {
-    const roleCallback = data;
-    const role = ALL_ROLES.find(r => r.callback === roleCallback);
+    const role = ALL_ROLES.find(r => r.callback === data);
     if (!role) {
       await bot.answerCallbackQuery(query.id);
       return;
@@ -208,28 +207,25 @@ bot.on('callback_query', async (query) => {
       return;
     }
 
-    // Toggle selection
     if (alreadySelected) {
       session.selectedRoles = session.selectedRoles.filter(r => r !== role.label);
     } else {
       session.selectedRoles.push(role.label);
     }
 
-    // Update keyboard in place
     try {
       await bot.editMessageReplyMarkup(
         buildRoleKeyboard(session.selectedRoles),
         { chat_id: chatId, message_id: session.roleMessageId }
       );
     } catch {
-      // Message might not have changed; ignore
+      // Ignore edit races for unchanged markup.
     }
 
     await bot.answerCallbackQuery(query.id);
     return;
   }
 
-  // ── Done selecting roles ──
   if (data === 'roles_done') {
     if (session.selectedRoles.length === 0) {
       await bot.answerCallbackQuery(query.id, {
@@ -252,7 +248,6 @@ bot.on('callback_query', async (query) => {
     return;
   }
 
-  // ── Experience selection ──
   if (data.startsWith('exp_')) {
     const expOption = EXP_OPTIONS.find(e => e.callback === data);
     if (!expOption) {
@@ -263,19 +258,18 @@ bot.on('callback_query', async (query) => {
     const experience = expOption.value;
     session.step = 'done';
 
-    // Save to users.json
     upsertUser(chatId, {
       roles: session.selectedRoles,
       experience
     });
 
-    console.log(`✅ Saved prefs for ${chatId}: roles=${session.selectedRoles.join(', ')}, exp=${experience}`);
+    console.log(`Saved prefs for ${chatId}: roles=${session.selectedRoles.join(', ')}, exp=${experience}`);
 
     await bot.answerCallbackQuery(query.id);
 
     const rolesDisplay = session.selectedRoles.join(', ');
     await bot.sendMessage(chatId, [
-      '✅ *All set! Here\'s your profile:*',
+      "*All set! Here's your profile:*",
       '',
       `*Roles:* ${rolesDisplay}`,
       `*Experience:* ${experience}`,
@@ -290,8 +284,6 @@ bot.on('callback_query', async (query) => {
 
   await bot.answerCallbackQuery(query.id);
 });
-
-// ─── Job fetching ─────────────────────────────────────────────────────────────
 
 async function fetchJobsForUser(user) {
   const isFresher = user.experience && user.experience.includes('Fresher');
@@ -320,8 +312,6 @@ async function fetchJobsForUser(user) {
   return applyAllFilters(allJobs, user, 5);
 }
 
-// ─── Error handling ───────────────────────────────────────────────────────────
-
 bot.on('polling_error', (err) => {
   console.error('Polling error:', err.message);
 });
@@ -330,4 +320,70 @@ process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
 });
 
-console.log('✅ Bot ready. Send /start in Telegram to begin onboarding.');
+async function startWebhookServer() {
+  const webhookBaseUrl = resolveWebhookBaseUrl();
+  if (!webhookBaseUrl) {
+    console.error('Webhook mode requires WEBHOOK_URL, RENDER_EXTERNAL_URL, or RENDER_EXTERNAL_HOSTNAME.');
+    process.exit(1);
+  }
+
+  const webhookUrl = `${webhookBaseUrl}${WEBHOOK_PATH}`;
+
+  await bot.deleteWebHook({ drop_pending_updates: false });
+  await bot.setWebHook(webhookUrl);
+
+  const server = http.createServer((req, res) => {
+    if (req.method === 'GET' && req.url === '/') {
+      res.writeHead(200, { 'Content-Type': 'text/plain' });
+      res.end('JobBot webhook server is running.');
+      return;
+    }
+
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ ok: true }));
+      return;
+    }
+
+    if (req.method === 'POST' && req.url === WEBHOOK_PATH) {
+      let body = '';
+
+      req.on('data', chunk => {
+        body += chunk;
+      });
+
+      req.on('end', () => {
+        try {
+          const update = JSON.parse(body || '{}');
+          bot.processUpdate(update);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: true }));
+        } catch (error) {
+          console.error('Webhook processing error:', error.message);
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ ok: false }));
+        }
+      });
+
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'text/plain' });
+    res.end('Not found');
+  });
+
+  server.listen(PORT, () => {
+    console.log(`Webhook server listening on port ${PORT}`);
+    console.log(`Telegram webhook set to ${webhookUrl}`);
+    console.log('Bot ready. Send /start in Telegram to begin onboarding.');
+  });
+}
+
+if (IS_RENDER) {
+  startWebhookServer().catch((error) => {
+    console.error('Failed to start webhook server:', error.message);
+    process.exit(1);
+  });
+} else {
+  console.log('Bot ready. Send /start in Telegram to begin onboarding.');
+}
