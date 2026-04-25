@@ -1,0 +1,40 @@
+name: Daily Job Digest
+
+on:
+  # Runs at 02:30 UTC = 08:00 AM IST (UTC+5:30)
+  schedule:
+    - cron: '30 2 * * *'
+  # Allow manual trigger from GitHub Actions tab
+  workflow_dispatch:
+
+jobs:
+  send-digest:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js 18
+        uses: actions/setup-node@v4
+        with:
+          node-version: '18'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run daily digest
+        env:
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          RAPIDAPI_KEY: ${{ secrets.RAPIDAPI_KEY }}
+        run: node digest.js
+
+      - name: Upload updated users.json as artifact (optional)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: users-json-${{ github.run_number }}
+          path: data/users.json
+          retention-days: 7
